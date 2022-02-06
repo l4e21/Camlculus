@@ -1,0 +1,6 @@
+(** @canonical Interpreter.Combinator *)
+module Combinator = Interpreter__Combinator
+
+
+(** @canonical Interpreter.Parser *)
+module Parser = Interpreter__Parser

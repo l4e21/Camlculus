@@ -1,0 +1,3 @@
+(library
+        (name Interpreter)
+        (flags (:standard -w -27)))
