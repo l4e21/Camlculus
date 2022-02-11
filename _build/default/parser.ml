@@ -1,4 +1,4 @@
-open Combinator
+include Combinator
 
 (*Type definitions*)
 
@@ -8,7 +8,7 @@ type expression =
   | EInt of int
   | EBool of bool
   | EVar of string
-  | EAbstract of (string * expression)
+  | EAbstract of (string * typeval * expression)
   | EClosure of {param: string; body: expression; env: expression Context.t}
   | ENative of (expression -> expression)
   | EApply of (expression * expression)
@@ -17,8 +17,19 @@ type expression =
   | ESub of (expression * expression)
   | ETimes of (expression * expression)
   | EDivide of (expression * expression)
+  | EEq of (expression * expression)
 
+and typeval =
+  | TInt
+  | TBool
+  | TArrow of (typeval * typeval)
+[@@deriving show { with_path=false }]
 (*Type utils*)
+
+let rec format_typeval = function
+  | TInt -> "INT"
+  | TBool -> "BOOL"
+  | TArrow (e1, e2) -> (format_typeval e1) ^ " -> " ^ (format_typeval e2)
 
 let extract_int x =
   match x with
@@ -35,16 +46,49 @@ and extract_var_symbol h =
       | EVar h -> h
       | _ -> (raise (Failure "attempted var extraction on non-var"))
 
-let make_abstract arg param =
-  (EAbstract (arg, param))
+let make_abstract arg typ param =
+  (EAbstract (arg, typ, param))
 
 let make_apply ex1 ex2 =
   (EApply (ex1, ex2))
 
 (*Language specific parsers*)
 
+let typeintparse =
+  fun state -> (pblock (listparse [(pchar "I");
+                                   (pchar "N");
+                                   (pchar "T")])) state
+let typeboolparse =
+  fun state -> (pblock (listparse [(pchar "B");
+                                   (pchar "O");
+                                   (pchar "O");
+                                   (pchar "L")])) state
+
+let rec arrowparse =
+  fun state -> (listparse
+                          [(nullparse (pchar "-"));
+                           (nullparse (pchar ">"));
+                           (nullparse (pchar "("));
+                           (choiceparse [(arrowparse); (typeintparse); (typeboolparse)]);
+                           (nullparse (pchar ","));
+                           (choiceparse [(arrowparse); (typeintparse); (typeboolparse)]);
+                          (nullparse (pchar ")"))]) state
+
+let typeparse =
+  fun state -> (pblock (listparse [(pchar ":");
+                                   (choiceparse [
+                                       (arrowparse);
+                                       (typeintparse);
+                                       (typeboolparse);
+                                     ])])) state
+
 let varparse =
-  fun state -> (pblock (listparse [(pchar "|"); (oneormoreparse letterparse); (pchar "|")]) state)
+  fun state -> (pblock (listparse [(pchar "|");
+                                   (oneormoreparse letterparse);
+                                   (pchar "|");
+                                  ]) state)
+
+
 
 let intparse =
   fun state -> (pblock (oneormoreparse digitparse) state)
@@ -59,6 +103,7 @@ let rec lamparse =
   (pblock
      (listparse [(pchar "\\");
                  varparse;
+                 typeparse;
                  (nullparse (pchar "."));
                  expr_parse])
  state)
@@ -86,7 +131,7 @@ and ifparse =
 
 and opparse =
   fun state ->
-  (pblock (listparse [(choiceparse [(pchar "+");(pchar "-");(pchar "*");(pchar "/")]);
+  (pblock (listparse [(choiceparse [(pchar "+");(pchar "-");(pchar "*");(pchar "/");(pchar "=")]);
                        expr_parse;
                       (nullparse (pchar ","));
                       expr_parse;
@@ -112,12 +157,25 @@ let rec traverse_ast =
         | "-" -> (make_sub (cdr h))
         | "/" -> (make_divide (cdr h))
         | "*" -> (make_times (cdr h))
+        | "=" -> (make_eq (cdr h))
         | "?" -> (make_if (cdr h))
         | _ -> (EInt (int_of_string (make_int h)))
       )
 
+and identify_type =
+  fun node -> let match_atomic_type atom = match (extract_node_char (nth 0 atom)) with
+      | "I" -> TInt
+      | "B" -> TBool
+      | _ -> raise (Failure "Unknown type primitive")
+      in 
+      let typedefs = (cdr (extract_node_many node)) in
+      match List.length (typedefs) with
+      | 1 -> (match_atomic_type (extract_node_many (nth 0 (typedefs))))
+      | 2 -> (TArrow ((identify_type (Many [(One ":");(nth 0 typedefs)])), (identify_type (Many [(One ":");(nth 0 typedefs)]))))
+      | _ -> raise (Failure "Wrong number of types defined")
+
 and make_abstraction h =
-  (make_abstract (extract_var_symbol (traverse_ast (nth 0 h))) (traverse_ast (nth 1 h)))
+  (make_abstract (extract_var_symbol (traverse_ast (nth 0 h))) (identify_type (nth 1 h)) (traverse_ast (nth 2 h)))
 
 and make_application h =
   (make_apply (traverse_ast (nth 0 h)) (traverse_ast (nth 1 h)))
@@ -131,6 +189,7 @@ and make_plus h = EAdd ((traverse_ast (nth 0 h)), (traverse_ast (nth 1 h)))
 and make_sub h = ESub ((traverse_ast (nth 0 h)), (traverse_ast (nth 1 h)))
 and make_times h = ETimes ((traverse_ast (nth 0 h)), (traverse_ast (nth 1 h)))
 and make_divide h = EDivide ((traverse_ast (nth 0 h)), (traverse_ast (nth 1 h)))
+and make_eq h = EEq ((traverse_ast (nth 0 h)), (traverse_ast (nth 1 h)))
 
 and make_var h = match h with
   | [] -> ""
